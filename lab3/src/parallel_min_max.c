@@ -40,18 +40,24 @@ int main(int argc, char **argv) {
         switch (option_index) {
           case 0:
             seed = atoi(optarg);
-            // your code here
-            // error handling
+            if (seed < 0) {
+              puts("Invalid seed value\n");
+              return EXIT_FAILURE;
+            }
             break;
           case 1:
             array_size = atoi(optarg);
-            // your code here
-            // error handling
+            if (array_size < 1) {
+              puts("Invalid array_size value\n");
+              return EXIT_FAILURE;
+            }
             break;
           case 2:
             pnum = atoi(optarg);
-            // your code here
-            // error handling
+            if (pnum < 1) {
+              puts("Invalid pnum value\n");
+              return EXIT_FAILURE;
+            }
             break;
           case 3:
             with_files = true;
@@ -84,6 +90,11 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  if (array_size < pnum) {
+    puts("Pnum must be less then array_size\n");
+    return EXIT_FAILURE;
+  }
+
   int *array = malloc(sizeof(int) * array_size);
   GenerateArray(array, array_size, seed);
   int active_child_processes = 0;
@@ -91,24 +102,52 @@ int main(int argc, char **argv) {
   struct timeval start_time;
   gettimeofday(&start_time, NULL);
 
+  int chunk_size = array_size / pnum;
+
+  int* pipes = (int*)malloc(pnum * sizeof(int) * 2);
+
   for (int i = 0; i < pnum; i++) {
+    if (pipe(pipes + i * 2) == -1) {
+      puts("Can't create pipe");
+      return EXIT_FAILURE;
+    }
+    int rd = *(pipes + i * 2);
+    int wd = *(pipes + i * 2 + 1);
     pid_t child_pid = fork();
     if (child_pid >= 0) {
       // successful fork
       active_child_processes += 1;
       if (child_pid == 0) {
-        // child process
-
-        // parallel somehow
-
+        int chunk_begin = i * chunk_size;
+        int chunk_end = chunk_begin + chunk_size;
+        if (i + 1 == pnum) {
+          chunk_end = array_size;
+        }
+        struct MinMax min_max = GetMinMax(array, chunk_begin, chunk_end);
         if (with_files) {
-          // use files here
+          char buff[128];
+          sprintf(buff, "prcess_%i", i);
+          FILE* file = fopen(buff, "w");
+          if (!file) {
+            printf("Can't open file (pid = %i)\n", child_pid);
+            return EXIT_FAILURE;
+          }
+          if (fwrite(&min_max, sizeof(min_max), 1, file) != 1) {
+            printf("Can't write min max (pid = %i)\n", child_pid);
+            return EXIT_FAILURE;
+          }
+          fclose(file);
         } else {
-          // use pipe here
+          close(rd);
+          if (write(wd, &min_max, sizeof(min_max)) == -1) {
+            printf("Can't write min max (pid = %i)\n", child_pid);
+            return EXIT_FAILURE;
+          }
+          close(wd);
         }
         return 0;
       }
-
+      close(wd);
     } else {
       printf("Fork failed!\n");
       return 1;
@@ -116,8 +155,11 @@ int main(int argc, char **argv) {
   }
 
   while (active_child_processes > 0) {
-    // your code here
-
+    pid_t cpid = wait(NULL);
+    if (cpid == -1) {
+      puts("Can't wait child process\n");
+    }
+    printf("Waited child process (pid = %i)\n", cpid);
     active_child_processes -= 1;
   }
 
@@ -126,17 +168,37 @@ int main(int argc, char **argv) {
   min_max.max = INT_MIN;
 
   for (int i = 0; i < pnum; i++) {
-    int min = INT_MAX;
-    int max = INT_MIN;
+    struct MinMax tmp_min_max;
+    tmp_min_max.min = INT_MAX;
+    tmp_min_max.max = INT_MIN;
+
+    int rd = *(pipes + i * 2);
+    int wd = *(pipes + i * 2 + 1);
 
     if (with_files) {
-      // read from files
+      char buff[128];
+      sprintf(buff, "prcess_%i", i);
+      FILE* file = fopen(buff, "r");
+      if (!file) {
+        printf("Can't open file (main process)\n");
+        return EXIT_FAILURE;
+      }
+      if (fread(&tmp_min_max, sizeof(tmp_min_max), 1, file) != 1) {
+        printf("Can't read min max (main process)\n");
+        return EXIT_FAILURE;
+      }
+      fclose(file);
+      remove(buff);
     } else {
-      // read from pipes
+      if (read(rd, &tmp_min_max, sizeof(tmp_min_max)) == -1) {
+        printf("Can't write min max (main process)\n");
+        return EXIT_FAILURE;
+      }
+      close(rd);
     }
 
-    if (min < min_max.min) min_max.min = min;
-    if (max > min_max.max) min_max.max = max;
+    if (tmp_min_max.min < min_max.min) min_max.min = tmp_min_max.min;
+    if (tmp_min_max.max > min_max.max) min_max.max = tmp_min_max.max;
   }
 
   struct timeval finish_time;

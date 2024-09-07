@@ -6,7 +6,7 @@
 
 int main(int argc, char **argv) {
   if (argc != 3) {
-    printf("Usage: %s seed arraysize\n", argv[0]);
+    printf("Usage: %s ${seed} ${arraysize}\n", argv[0]);
     return 1;
   }
 
