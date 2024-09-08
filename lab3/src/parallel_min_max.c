@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
+#include <time.h>
 
 #include <sys/time.h>
 #include <sys/types.h>
@@ -15,11 +17,18 @@
 #include "find_min_max.h"
 #include "utils.h"
 
+double diffclock( clock_t clock1, clock_t clock2 ) {
+    double diffticks = clock1 - clock2;
+    double diffms = diffticks / ( CLOCKS_PER_SEC / 1000 );
+    return diffms;
+}
+
 int main(int argc, char **argv) {
   int seed = -1;
   int array_size = -1;
   int pnum = -1;
   bool with_files = false;
+  int timeout = -1;
 
   while (true) {
     int current_optind = optind ? optind : 1;
@@ -28,10 +37,11 @@ int main(int argc, char **argv) {
                                       {"array_size", required_argument, 0, 0},
                                       {"pnum", required_argument, 0, 0},
                                       {"by_files", no_argument, 0, 'f'},
+                                      {"timeout", required_argument, 0, 't'},
                                       {0, 0, 0, 0}};
 
     int option_index = 0;
-    int c = getopt_long(argc, argv, "f", options, &option_index);
+    int c = getopt_long(argc, argv, "ft", options, &option_index);
 
     if (c == -1) break;
 
@@ -62,6 +72,17 @@ int main(int argc, char **argv) {
           case 3:
             with_files = true;
             break;
+          case 4:
+            if (strlen(optarg) < 1) {
+              puts("Invalid timeout value\n");
+              return EXIT_FAILURE;
+            }
+            timeout = atoi(optarg);
+            if (timeout < 0) {
+              puts("Invalid timeout value\n");
+              return EXIT_FAILURE;
+            }
+            break;
 
           defalut:
             printf("Index %d is out of options\n", option_index);
@@ -69,6 +90,13 @@ int main(int argc, char **argv) {
         break;
       case 'f':
         with_files = true;
+        break;
+      case 't':
+        timeout = atoi(optarg);
+        if (timeout < 0) {
+          puts("Invalid timeout value\n");
+          return EXIT_FAILURE;
+        }
         break;
 
       case '?':
@@ -95,16 +123,24 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
+  printf("Args parsed! (array_size = %i pnum = %i)\n", array_size, pnum);
+  fflush(NULL);
+
+
+  printf("Start array generating...\n");
+  fflush(NULL);
   int *array = malloc(sizeof(int) * array_size);
   GenerateArray(array, array_size, seed);
   int active_child_processes = 0;
 
-  struct timeval start_time;
-  gettimeofday(&start_time, NULL);
+  printf("Array generated!\n");
+
+  clock_t start_time = clock();
 
   int chunk_size = array_size / pnum;
 
   int* pipes = (int*)malloc(pnum * sizeof(int) * 2);
+  pid_t* pids = (pid_t*)malloc(pnum * sizeof(pid_t));
 
   for (int i = 0; i < pnum; i++) {
     if (pipe(pipes + i * 2) == -1) {
@@ -118,6 +154,8 @@ int main(int argc, char **argv) {
       // successful fork
       active_child_processes += 1;
       if (child_pid == 0) {
+        signal(SIGKILL, SIG_DFL);
+
         int chunk_begin = i * chunk_size;
         int chunk_end = chunk_begin + chunk_size;
         if (i + 1 == pnum) {
@@ -147,6 +185,9 @@ int main(int argc, char **argv) {
         }
         return 0;
       }
+      pids[i] = child_pid;
+      printf("Forked process (cpid = %i)\n", child_pid);
+      fflush(NULL);
       close(wd);
     } else {
       printf("Fork failed!\n");
@@ -154,13 +195,44 @@ int main(int argc, char **argv) {
     }
   }
 
-  while (active_child_processes > 0) {
-    pid_t cpid = wait(NULL);
-    if (cpid == -1) {
-      puts("Can't wait child process\n");
+  puts("Child processes created!");
+  fflush(NULL);
+
+  signal(SIGKILL, SIG_IGN);
+
+  if (timeout != -1) {
+    clock_t start_waiting = clock();
+    while ((diffclock(clock(), start_time) < timeout) && active_child_processes > 0) {
+      pid_t cpid = waitpid(0, NULL, WNOHANG);
+      if (cpid == -1) {
+        puts("Can't wait child process\n");
+        return EXIT_FAILURE;
+      }
+      if (cpid > 0) {
+        printf("Waited child process (pid = %i)\n", cpid);
+        active_child_processes -= 1;
+      }
     }
-    printf("Waited child process (pid = %i)\n", cpid);
-    active_child_processes -= 1;
+
+    for (int i = 0; i < pnum; i++) {
+      int res = kill(pids[i], SIGKILL);
+      if (res == -1) {
+        printf("Can't send SIGKILL signal (pid = %i)\n", pids[i]);
+        continue;
+      }
+      printf("Sended SIGKILL signal to child prcess (pid = %i)\n", pids[i]);
+      active_child_processes -= 1;
+    }
+  } else {
+    while (active_child_processes > 0) {
+      pid_t cpid = waitpid(0, NULL, 0);
+      if (cpid == -1) {
+        puts("Can't wait child process\n");
+        return EXIT_FAILURE;
+      }
+      printf("Waited child process (pid = %i)\n", cpid);
+      active_child_processes -= 1;
+    }
   }
 
   struct MinMax min_max;
@@ -201,13 +273,13 @@ int main(int argc, char **argv) {
     if (tmp_min_max.max > min_max.max) min_max.max = tmp_min_max.max;
   }
 
-  struct timeval finish_time;
-  gettimeofday(&finish_time, NULL);
+  clock_t finish_time = clock();
 
-  double elapsed_time = (finish_time.tv_sec - start_time.tv_sec) * 1000.0;
-  elapsed_time += (finish_time.tv_usec - start_time.tv_usec) / 1000.0;
+  double elapsed_time = diffclock(finish_time, start_time);
 
   free(array);
+  free(pipes);
+  free(pids);
 
   printf("Min: %d\n", min_max.min);
   printf("Max: %d\n", min_max.max);
