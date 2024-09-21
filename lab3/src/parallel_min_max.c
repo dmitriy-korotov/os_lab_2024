@@ -17,10 +17,13 @@
 #include "find_min_max.h"
 #include "utils.h"
 
-double diffclock( clock_t clock1, clock_t clock2 ) {
-    double diffticks = clock1 - clock2;
-    double diffms = diffticks / ( CLOCKS_PER_SEC / 1000 );
-    return diffms;
+void alarmHandler(int) {
+  printf("Timeout on process with pid = '%d'\n", getpid());
+  exit(EXIT_SUCCESS);
+}
+
+double difftimems(struct timeval time1, struct timeval time2) {
+    return (time1.tv_sec - time2.tv_sec) * 1000.0 + (time1.tv_usec - time2.tv_usec) / 1000.0;
 }
 
 int main(int argc, char **argv) {
@@ -135,7 +138,8 @@ int main(int argc, char **argv) {
 
   printf("Array generated!\n");
 
-  clock_t start_time = clock();
+  struct timeval start_time;
+  gettimeofday(&start_time, NULL);
 
   int chunk_size = array_size / pnum;
 
@@ -154,13 +158,19 @@ int main(int argc, char **argv) {
       // successful fork
       active_child_processes += 1;
       if (child_pid == 0) {
-        signal(SIGKILL, SIG_DFL);
+        signal(SIGALRM, alarmHandler);
+        if (timeout != -1) {
+          alarm(timeout);
+        }
 
         int chunk_begin = i * chunk_size;
         int chunk_end = chunk_begin + chunk_size;
         if (i + 1 == pnum) {
           chunk_end = array_size;
         }
+
+        sleep(1);
+
         struct MinMax min_max = GetMinMax(array, chunk_begin, chunk_end);
         if (with_files) {
           char buff[128];
@@ -197,42 +207,15 @@ int main(int argc, char **argv) {
 
   puts("Child processes created!");
   fflush(NULL);
-
-  signal(SIGKILL, SIG_IGN);
-
-  if (timeout != -1) {
-    clock_t start_waiting = clock();
-    while ((diffclock(clock(), start_time) < timeout) && active_child_processes > 0) {
-      pid_t cpid = waitpid(0, NULL, WNOHANG);
-      if (cpid == -1) {
-        puts("Can't wait child process\n");
-        return EXIT_FAILURE;
-      }
-      if (cpid > 0) {
-        printf("Waited child process (pid = %i)\n", cpid);
-        active_child_processes -= 1;
-      }
+  
+  while (active_child_processes > 0) {
+    pid_t cpid = waitpid(0, NULL, 0);
+    if (cpid == -1) {
+      puts("Can't wait child process\n");
+      return EXIT_FAILURE;
     }
-
-    for (int i = 0; i < pnum; i++) {
-      int res = kill(pids[i], SIGKILL);
-      if (res == -1) {
-        printf("Can't send SIGKILL signal (pid = %i)\n", pids[i]);
-        continue;
-      }
-      printf("Sended SIGKILL signal to child prcess (pid = %i)\n", pids[i]);
-      active_child_processes -= 1;
-    }
-  } else {
-    while (active_child_processes > 0) {
-      pid_t cpid = waitpid(0, NULL, 0);
-      if (cpid == -1) {
-        puts("Can't wait child process\n");
-        return EXIT_FAILURE;
-      }
-      printf("Waited child process (pid = %i)\n", cpid);
-      active_child_processes -= 1;
-    }
+    printf("Waited child process (pid = %i)\n", cpid);
+    active_child_processes -= 1;
   }
 
   struct MinMax min_max;
@@ -273,9 +256,10 @@ int main(int argc, char **argv) {
     if (tmp_min_max.max > min_max.max) min_max.max = tmp_min_max.max;
   }
 
-  clock_t finish_time = clock();
+  struct timeval finish_time;
+  gettimeofday(&finish_time, NULL);
 
-  double elapsed_time = diffclock(finish_time, start_time);
+  double elapsed_time = difftimems(finish_time, start_time);
 
   free(array);
   free(pipes);
@@ -283,7 +267,7 @@ int main(int argc, char **argv) {
 
   printf("Min: %d\n", min_max.min);
   printf("Max: %d\n", min_max.max);
-  printf("Elapsed time: %fms\n", elapsed_time);
+  printf("Elapsed time: %lfms\n", elapsed_time);
   fflush(NULL);
   return 0;
 }
