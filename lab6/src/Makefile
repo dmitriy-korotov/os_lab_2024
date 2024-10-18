@@ -18,6 +18,8 @@ clean-client: --clean-common
 server: --libcommon
 	$(CC) -g server.c -L./ -lcommon -I./ -o server
 
+all: server client
+
 clean-server: --clean-common
 	rm -rf server &> /dev/null
 
