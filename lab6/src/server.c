@@ -154,8 +154,8 @@ int main(int argc, char **argv) {
 
       struct FactorialArgs args[tnum];
       for (uint32_t i = 0; i < tnum; i++) {
-        args[i].begin = i * (end - begin) / tnum + 1;
-        args[i].end = (i + 1) * (end - begin) / tnum + 1;
+        args[i].begin = begin + i * (end - begin) / tnum;
+        args[i].end = begin + (i + 1) * (end - begin) / tnum;
         if (i + 1 == tnum) {
           args[i].end = end;
         }

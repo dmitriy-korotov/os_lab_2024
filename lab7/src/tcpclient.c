@@ -7,17 +7,15 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#define BUFSIZE 100
 #define SADDR struct sockaddr
 #define SIZE sizeof(struct sockaddr_in)
 
 int main(int argc, char *argv[]) {
   int fd;
   int nread;
-  char buf[BUFSIZE];
   struct sockaddr_in servaddr;
   if (argc < 3) {
-    printf("Too few arguments \n");
+    printf("Too few arguments\nUsage: tcpclient <ip> <port> <buffer_size>\n");
     exit(1);
   }
 
@@ -36,6 +34,9 @@ int main(int argc, char *argv[]) {
 
   servaddr.sin_port = htons(atoi(argv[2]));
 
+  int BUFSIZE = atoi(argv[3]);
+  char buf[BUFSIZE];
+
   if (connect(fd, (SADDR *)&servaddr, SIZE) < 0) {
     perror("connect");
     exit(1);
@@ -44,6 +45,7 @@ int main(int argc, char *argv[]) {
   write(1, "Input message to send\n", 22);
   while ((nread = read(0, buf, BUFSIZE)) > 0) {
     if (write(fd, buf, nread) < 0) {
+      printf("Can't write message\n");
       perror("write");
       exit(1);
     }
